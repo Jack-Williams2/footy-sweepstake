@@ -1,16 +1,13 @@
 // src/App.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 /**
- * Robust sweepstake app with correct persistence.
- * Key fix: "hydrated" flag prevents first-render effects from overwriting localStorage.
- * Reserved "slots" (not names) are assigned to users with a cost and filled from each sweep's pool,
- * so both sweeps receive extras independently.
+ * AFL Sweepstake App — robust reserved-slot handling + localStorage
  */
 
 function App() {
-  // Core state
+  // Core setup state
   const [users, setUsers] = useState([]);
   const [players, setPlayers] = useState([]);
   const [newUser, setNewUser] = useState("");
@@ -18,110 +15,119 @@ function App() {
   const [htmlSnippet, setHtmlSnippet] = useState("");
   const [contribution, setContribution] = useState(10);
 
-  // Reserved slot preview + selections
-  // reservedSlotsRemaining: how many leftover slots (count) you can assign before creating sweeps
-  // reservedSelections: { [user]: { count: number, total: number } }
-  const [reservedSlotsRemaining, setReservedSlotsRemaining] = useState(0);
+  // Reserved slots (pre-creation)
   const [reservedSelections, setReservedSelections] = useState({});
+  const [showReservedPreview, setShowReservedPreview] = useState(false);
+  const [reserveUser, setReserveUser] = useState("");
+  const [reserveAmount, setReserveAmount] = useState("");
 
-  // Sweeps object:
-  // {
-  //   "Norm Smith": {
-  //     assignments: { [user]: string[] },
-  //     pool: string[],
-  //     userContributions: { [user]: number },
-  //     potBonus: number,
-  //     winner: { player, user } | null
-  //   },
-  //   "First Goal": { ... }
-  // }
+  // Sweeps
   const [sweeps, setSweeps] = useState({});
 
-  // HYDRATION GUARD — prevents "empty initial state" from overwriting saved data.
+  // Hydration guard
   const [hydrated, setHydrated] = useState(false);
 
-  // --------------------------
-  // Load from localStorage once
-  // --------------------------
+  // ---------- helpers for reservedSelections backward-compat ----------
+  const getUserSlots = (rs, user) => {
+    const entry = rs?.[user];
+    if (Array.isArray(entry)) return entry;
+    if (entry && typeof entry === "object") {
+      const count = Number(entry.count) || 0;
+      const total = Number(entry.total) || 0;
+      if (count <= 0) return [];
+      const per = count ? total / count : 0;
+      return Array.from({ length: count }, (_, i) => ({
+        id: `migrated-${user}-${i}`,
+        amount: per,
+      }));
+    }
+    return [];
+  };
+
+  const normalizeReservedSelections = (rs) => {
+    const out = {};
+    Object.keys(rs || {}).forEach((u) => {
+      const arr = getUserSlots(rs, u);
+      if (arr.length) out[u] = arr;
+    });
+    return out;
+  };
+
+  // ---------- Load from localStorage once ----------
   useEffect(() => {
     try {
       const lsUsers = JSON.parse(localStorage.getItem("users") || "[]");
       const lsPlayers = JSON.parse(localStorage.getItem("players") || "[]");
       const lsContribution = JSON.parse(localStorage.getItem("contribution") || "10");
-      const lsReservedSlotsRemaining = JSON.parse(localStorage.getItem("reservedSlotsRemaining") || "0");
       const lsReservedSelections = JSON.parse(localStorage.getItem("reservedSelections") || "{}");
+      const lsShowReservedPreview = JSON.parse(localStorage.getItem("showReservedPreview") || "false");
       const lsSweeps = JSON.parse(localStorage.getItem("sweeps") || "{}");
 
       if (Array.isArray(lsUsers)) setUsers(lsUsers);
       if (Array.isArray(lsPlayers)) setPlayers(lsPlayers);
       if (typeof lsContribution === "number") setContribution(lsContribution);
-      if (typeof lsReservedSlotsRemaining === "number") setReservedSlotsRemaining(lsReservedSlotsRemaining);
-      if (lsReservedSelections && typeof lsReservedSelections === "object") setReservedSelections(lsReservedSelections);
+      setReservedSelections(normalizeReservedSelections(lsReservedSelections || {}));
+      setShowReservedPreview(Boolean(lsShowReservedPreview));
       if (lsSweeps && typeof lsSweeps === "object") setSweeps(lsSweeps);
     } catch {
-      // If anything is corrupted, fall back to defaults
-      setUsers([]);
-      setPlayers([]);
-      setContribution(10);
-      setReservedSlotsRemaining(0);
-      setReservedSelections({});
-      setSweeps({});
+      // keep defaults
     } finally {
-      // Mark as hydrated so save effects can run safely
       setHydrated(true);
     }
   }, []);
 
-  // --------------------------
-  // Persist to localStorage (guarded by "hydrated")
-  // --------------------------
-  useEffect(() => {
+  // ---------- Persist to localStorage ----------
+  const persist = (key, value) => {
     if (!hydrated) return;
-    localStorage.setItem("users", JSON.stringify(users));
-  }, [users, hydrated]);
+    localStorage.setItem(key, JSON.stringify(value));
+  };
+  useEffect(() => persist("users", users), [users, hydrated]);
+  useEffect(() => persist("players", players), [players, hydrated]);
+  useEffect(() => persist("contribution", contribution), [contribution, hydrated]);
+  useEffect(() => persist("reservedSelections", reservedSelections), [reservedSelections, hydrated]);
+  useEffect(() => persist("showReservedPreview", showReservedPreview), [showReservedPreview, hydrated]);
+  useEffect(() => persist("sweeps", sweeps), [sweeps, hydrated]);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem("players", JSON.stringify(players));
-  }, [players, hydrated]);
+  // ---------- Derived reserved slots ----------
+  const remainder = useMemo(() => {
+    if (!users.length || !players.length) return 0;
+    return players.length % users.length;
+  }, [users.length, players.length]);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem("contribution", JSON.stringify(contribution));
-  }, [contribution, hydrated]);
+  const totalAssignedSlots = useMemo(() => {
+    return users.reduce((sum, u) => sum + getUserSlots(reservedSelections, u).length, 0);
+  }, [users, reservedSelections]);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem("reservedSlotsRemaining", JSON.stringify(reservedSlotsRemaining));
-  }, [reservedSlotsRemaining, hydrated]);
+  const reservedSlotsRemaining = Math.max(0, remainder - totalAssignedSlots);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem("reservedSelections", JSON.stringify(reservedSelections));
-  }, [reservedSelections, hydrated]);
+  const perUserReservedTotals = useMemo(() => {
+    const totals = {};
+    users.forEach((u) => {
+      const arr = getUserSlots(reservedSelections, u);
+      totals[u] = arr.reduce((s, slot) => s + (Number(slot.amount) || 0), 0);
+    });
+    return totals;
+  }, [users, reservedSelections]);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem("sweeps", JSON.stringify(sweeps));
-  }, [sweeps, hydrated]);
-
-  // --------------------------
-  // Helpers
-  // --------------------------
+  // ---------- Setup helpers ----------
   const parsePlayersFromHtml = (html) => {
     try {
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
-      // Anchor with class team-lineups__player-entry is the most consistent selector
-      const entryEls = Array.from(doc.querySelectorAll(".team-lineups__player-entry"));
+      const entryEls = Array.from(
+        doc.querySelectorAll(
+          ".team-lineups__player-entry, .team-lineups__player-entry--home-team, .team-lineups__player-entry--away-team"
+        )
+      );
       const names = new Set();
       entryEls.forEach((el) => {
-        const title = el.getAttribute("title");
+        const anchor = el.tagName?.toLowerCase() === "a" ? el : el.querySelector?.("a");
+        const title = anchor?.getAttribute?.("title");
         if (title) {
           names.add(title.split(".")[0].trim());
           return;
         }
-        const aria = el.getAttribute("aria-label");
+        const aria = el.getAttribute?.("aria-label");
         if (aria) names.add(aria.split(".")[0].trim());
       });
       return Array.from(names);
@@ -132,10 +138,7 @@ function App() {
 
   const handleExtractPlayers = () => {
     const parsed = parsePlayersFromHtml(htmlSnippet);
-    if (!parsed.length) {
-      alert("No players found in pasted HTML");
-      return;
-    }
+    if (!parsed.length) return alert("No players found in pasted HTML");
     setPlayers((prev) => Array.from(new Set([...prev, ...parsed])));
     setHtmlSnippet("");
   };
@@ -156,56 +159,62 @@ function App() {
     }
   };
 
+  const removePlayerFromGlobalPool = (name) => {
+    setPlayers((prev) => prev.filter((p) => p !== name));
+  };
+
+  const previewReservedSlots = () => {
+    if (!users.length || !players.length) {
+      alert("Add at least one user and one player first.");
+      return;
+    }
+    setShowReservedPreview(true);
+  };
+
+  const genId = () => Math.random().toString(36).slice(2, 10);
+
+  const assignReservedSlotToUser = () => {
+    const user = reserveUser;
+    const amount = Number(reserveAmount);
+    if (!user) return alert("Choose a user");
+    if (!amount || isNaN(amount) || amount <= 0) return alert("Enter a valid $ amount");
+    if (reservedSlotsRemaining <= 0) return alert("No reserved slots left");
+
+    setReservedSelections((prev) => {
+      const base = normalizeReservedSelections(prev);
+      const arr = getUserSlots(base, user).slice();
+      arr.push({ id: genId(), amount });
+      return { ...base, [user]: arr };
+    });
+    setReserveAmount("");
+  };
+
+  const undoOneReservedSlotForUser = (user) => {
+    setReservedSelections((prev) => {
+      const base = normalizeReservedSelections(prev);
+      const arr = getUserSlots(base, user).slice();
+      if (!arr.length) return prev;
+      arr.pop();
+      const next = { ...base };
+      if (arr.length) next[user] = arr;
+      else delete next[user];
+      return next;
+    });
+  };
+
+  // ---------- Create sweeps ----------
   const assignPlayersEvenlyWithLeftover = (playerList, userList) => {
     const shuffled = [...playerList].sort(() => Math.random() - 0.5);
     const assignments = {};
     userList.forEach((u) => (assignments[u] = []));
-    const remainder = shuffled.length % userList.length;
-    const leftover = remainder > 0 ? shuffled.slice(-remainder) : [];
-    const assignable = remainder > 0 ? shuffled.slice(0, shuffled.length - remainder) : shuffled;
+    const rem = userList.length ? shuffled.length % userList.length : 0;
+    const leftover = rem > 0 ? shuffled.slice(-rem) : [];
+    const assignable = rem > 0 ? shuffled.slice(0, shuffled.length - rem) : shuffled;
     assignable.forEach((p, i) => {
       const u = userList[i % userList.length];
       assignments[u].push(p);
     });
     return { assignments, leftover };
-  };
-
-  const previewReservedSlots = () => {
-    if (!users.length || !players.length) {
-      alert("Add users and players first.");
-      return;
-    }
-    // Count-only preview: leftover count = players % users
-    const remainder = players.length % users.length;
-    setReservedSlotsRemaining(remainder);
-    // Keep reservedSelections as-is; user can add more slots or clear all later
-  };
-
-  const assignReservedSlotToUser = (user, amountStr) => {
-    const amount = Number(amountStr);
-    if (!user) {
-      alert("Select a user.");
-      return;
-    }
-    if (!amount || isNaN(amount) || amount <= 0) {
-      alert("Enter a valid contribution amount.");
-      return;
-    }
-    if (reservedSlotsRemaining <= 0) {
-      alert("No reserved slots left to assign.");
-      return;
-    }
-
-    setReservedSelections((prev) => {
-      const next = { ...prev };
-      if (!next[user]) next[user] = { count: 0, total: 0 };
-      next[user] = {
-        count: next[user].count + 1,
-        total: next[user].total + amount,
-      };
-      return next;
-    });
-    setReservedSlotsRemaining((n) => Math.max(0, n - 1));
   };
 
   const createSweeps = () => {
@@ -214,35 +223,31 @@ function App() {
       return;
     }
 
-    const sweepNames = ["Norm Smith", "First Goal"];
-    const nextSweeps = {};
+    const names = ["Norm Smith", "First Goal"];
+    const built = {};
 
-    sweepNames.forEach((name) => {
+    names.forEach((name) => {
       const { assignments, leftover } = assignPlayersEvenlyWithLeftover(players, users);
-
-      // Fill reserved slots from THIS sweep's pool (so both sweeps get their extras)
       let pool = [...leftover];
       const finalAssignments = { ...assignments };
       users.forEach((u) => {
         if (!finalAssignments[u]) finalAssignments[u] = [];
       });
 
-      Object.entries(reservedSelections).forEach(([u, info]) => {
-        const need = info.count;
-        for (let i = 0; i < need && pool.length > 0; i++) {
+      users.forEach((u) => {
+        const slots = getUserSlots(reservedSelections, u);
+        for (let i = 0; i < slots.length && pool.length > 0; i++) {
           finalAssignments[u] = [...finalAssignments[u], pool.shift()];
         }
       });
 
-      // Per-user contributions (base + extras)
       const userContributions = {};
       users.forEach((u) => {
-        const extra = reservedSelections[u]?.total || 0;
-        userContributions[u] = contribution + extra;
+        userContributions[u] = contribution + (perUserReservedTotals[u] || 0);
       });
-      const potBonus = Object.values(reservedSelections).reduce((sum, v) => sum + (v?.total || 0), 0);
+      const potBonus = Object.values(perUserReservedTotals).reduce((s, v) => s + v, 0);
 
-      nextSweeps[name] = {
+      built[name] = {
         assignments: finalAssignments,
         pool,
         userContributions,
@@ -251,16 +256,50 @@ function App() {
       };
     });
 
-    setSweeps(nextSweeps);
-    // Reset preview/selection after commit so we don't double-apply on next create
-    setReservedSlotsRemaining(0);
+    setSweeps(built);
     setReservedSelections({});
+    setShowReservedPreview(false);
+    setReserveUser("");
+    setReserveAmount("");
+  };
+
+  const removePlayerFromUser = (sweepName, user, player) => {
+    setSweeps((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const sweep = next[sweepName];
+      if (!sweep) return prev;
+      sweep.assignments[user] = sweep.assignments[user].filter((p) => p !== player);
+      sweep.pool.push(player);
+      return next;
+    });
+  };
+
+  const movePlayerBetweenUsers = (sweepName, fromUser, toUser, player) => {
+    if (fromUser === toUser) return;
+    setSweeps((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const sweep = next[sweepName];
+      if (!sweep) return prev;
+      sweep.assignments[fromUser] = sweep.assignments[fromUser].filter((p) => p !== player);
+      sweep.assignments[toUser].push(player);
+      return next;
+    });
+  };
+
+  const assignPoolPlayerToUser = (sweepName, user, player) => {
+    setSweeps((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const sweep = next[sweepName];
+      if (!sweep) return prev;
+      sweep.pool = sweep.pool.filter((p) => p !== player);
+      sweep.assignments[user].push(player);
+      return next;
+    });
   };
 
   const declareWinner = (sweepName, player) => {
     const name = (player || "").trim();
     if (!name) return;
-
     setSweeps((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
       const sweep = next[sweepName];
@@ -281,7 +320,10 @@ function App() {
     });
   };
 
-  // Post-creation: add money to pot (does not assign players)
+  const [moneySweep, setMoneySweep] = useState("Norm Smith");
+  const [moneyUser, setMoneyUser] = useState("");
+  const [moneyAmount, setMoneyAmount] = useState("");
+
   const addMoneyToSweep = (sweepName, user, amountStr) => {
     const amount = Number(amountStr);
     if (!sweepName || !user || !amount || isNaN(amount) || amount <= 0) {
@@ -296,6 +338,7 @@ function App() {
       sweep.potBonus = (sweep.potBonus || 0) + amount;
       return next;
     });
+    setMoneyAmount("");
   };
 
   const clearAll = () => {
@@ -303,24 +346,24 @@ function App() {
     setUsers([]);
     setPlayers([]);
     setContribution(10);
-    setReservedSlotsRemaining(0);
     setReservedSelections({});
+    setShowReservedPreview(false);
     setSweeps({});
     setNewUser("");
     setNewPlayer("");
     setHtmlSnippet("");
+    setReserveUser("");
+    setReserveAmount("");
+    setMoneySweep("Norm Smith");
+    setMoneyUser("");
+    setMoneyAmount("");
   };
-
-  // Small UI state for adding post-creation money
-  const [moneySweep, setMoneySweep] = useState("Norm Smith");
-  const [moneyUser, setMoneyUser] = useState("");
-  const [moneyAmount, setMoneyAmount] = useState("");
 
   return (
     <div className="app-container">
       <h1 className="title">AFL Sweepstake App</h1>
 
-      {/* Setup cards */}
+      {/* Setup (always visible) */}
       <div className="card-grid">
         <div className="card">
           <h2>Players</h2>
@@ -340,10 +383,20 @@ function App() {
             />
             <button onClick={addPlayer}>Add Player</button>
           </div>
-          <p style={{ marginTop: 8, fontStyle: "italic" }}>
-            Total players: {players.length}
-          </p>
-          <ul>{players.map((p, i) => <li key={i}>{p}</li>)}</ul>
+          <p className="muted-text">Total players: {players.length}</p>
+          <ul>
+            {players.map((p) => (
+              <li key={p}>
+                {p}{" "}
+                <button
+                  title="Remove from pool (pre-creation only affects future sweeps)"
+                  onClick={() => removePlayerFromGlobalPool(p)}
+                >
+                  ❌
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
 
         <div className="card">
@@ -354,10 +407,8 @@ function App() {
             onChange={(e) => setNewUser(e.target.value)}
           />
           <button onClick={addUser}>Add User</button>
-          <p style={{ marginTop: 8, fontStyle: "italic" }}>
-            Total users: {users.length}
-          </p>
-          <ul>{users.map((u, i) => <li key={i}>{u}</li>)}</ul>
+          <p className="muted-text">Total users: {users.length}</p>
+          <ul>{users.map((u) => <li key={u}>{u}</li>)}</ul>
         </div>
 
         <div className="card">
@@ -374,150 +425,223 @@ function App() {
           <div style={{ marginTop: 12 }}>
             <button onClick={previewReservedSlots}>Preview Reserved Slots</button>
             <button onClick={createSweeps} style={{ marginLeft: 8 }}>
-              Create Sweeps
+              Create / Re-create Sweeps
             </button>
           </div>
           <button className="danger-btn" onClick={clearAll} style={{ marginTop: 12 }}>
             Clear All Data
           </button>
+          <p className="muted-text">
+            Setup changes affect the next time you click "Create / Re-create Sweeps". Existing sweeps won’t auto-update.
+          </p>
         </div>
       </div>
 
-      {/* Reserved slots (preview + selection) */}
-      {(reservedSlotsRemaining > 0 || Object.keys(reservedSelections).length > 0) && (
+      {/* Reserved slots */}
+      {(showReservedPreview || Object.keys(reservedSelections).length > 0) && (
         <div className="card" style={{ marginTop: 16 }}>
           <h2>Reserved Slots</h2>
           <p>
-            {reservedSlotsRemaining} slot(s) unassigned.
-            Assign a hidden slot to a user with a $ amount. On creation, each sweep will
-            pull that many players for that user from its own pool.
+            Remainder: <b>{remainder}</b> — Assigned: <b>{totalAssignedSlots}</b> — Remaining:{" "}
+            <b>{reservedSlotsRemaining}</b>
           </p>
-          {users.length > 0 && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <select id="reserve-user">
-                <option value="">Select user…</option>
-                {users.map((u) => (
-                  <option key={u} value={u}>{u}</option>
-                ))}
-              </select>
-              <input id="reserve-amount" type="number" placeholder="$ amount" style={{ width: 120 }} />
-              <button
-                onClick={() =>
-                  assignReservedSlotToUser(
-                    document.getElementById("reserve-user").value,
-                    document.getElementById("reserve-amount").value
-                  )
-                }
-              >
-                Assign Slot
-              </button>
-            </div>
+          {reservedSlotsRemaining === 0 && remainder > 0 && (
+            <p className="warning-text">All available extra slots are already assigned.</p>
           )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <select value={reserveUser} onChange={(e) => setReserveUser(e.target.value)}>
+              <option value="">Select user…</option>
+              {users.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+            <input
+              type="number"
+              placeholder="$ amount"
+              value={reserveAmount}
+              onChange={(e) => setReserveAmount(e.target.value)}
+              style={{ width: 120 }}
+            />
+            <button disabled={reservedSlotsRemaining <= 0} onClick={assignReservedSlotToUser}>
+              Assign Slot
+            </button>
+          </div>
 
           {Object.keys(reservedSelections).length > 0 && (
             <div style={{ marginTop: 12 }}>
               <h3>Locked Extras</h3>
               <ul>
-                {Object.entries(reservedSelections).map(([u, v]) => (
-                  <li key={u}>
-                    {u}: {v.count} slot(s), ${v.total}
-                  </li>
-                ))}
+                {users.map((u) => {
+                  const slots = getUserSlots(reservedSelections, u);
+                  if (!slots.length) return null;
+                  const sum = slots.reduce((s, sl) => s + (Number(sl.amount) || 0), 0);
+                  return (
+                    <li key={u}>
+                      {u}: {slots.length} slot(s), ${sum}{" "}
+                      <button onClick={() => undoOneReservedSlotForUser(u)} style={{ marginLeft: 8 }}>
+                        Undo one
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
         </div>
       )}
 
-      {/* Add money after sweeps exist */}
+      {/* Post-creation controls */}
       {Object.keys(sweeps).length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h2>Add Money to Pot (After Creation)</h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <select value={moneySweep} onChange={(e) => setMoneySweep(e.target.value)}>
-              {Object.keys(sweeps).map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
-            <select value={moneyUser} onChange={(e) => setMoneyUser(e.target.value)}>
-              <option value="">Select user…</option>
-              {users.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
-            <input
-              type="number"
-              placeholder="$ amount"
-              value={moneyAmount}
-              onChange={(e) => setMoneyAmount(e.target.value)}
-              style={{ width: 120 }}
+        <>
+          <div className="card" style={{ marginTop: 16 }}>
+            <h2>Add Money to Pot (After Creation)</h2>
+            <AddMoneyControls
+              sweeps={sweeps}
+              users={users}
+              onAdd={(sweepName, user, amount) => addMoneyToSweep(sweepName, user, amount)}
             />
-            <button onClick={() => { addMoneyToSweep(moneySweep, moneyUser, moneyAmount); setMoneyAmount(""); }}>
-              Add
-            </button>
+            <p className="muted-text">
+              This increases a sweep’s pot and the selected user’s contribution; it does not assign extra players.
+            </p>
           </div>
-          <p style={{ marginTop: 6, fontStyle: "italic" }}>
-            This increases a sweep’s pot and the selected user’s contribution; it does not assign extra players.
-          </p>
-        </div>
-      )}
 
-      {/* Sweeps display */}
-      {Object.keys(sweeps).length > 0 && (
-        <div className="sweep-grid" style={{ marginTop: 16 }}>
-          {Object.entries(sweeps).map(([sweepName, sweep]) => {
-            const totalPot = Object.values(sweep.userContributions || {}).reduce((a, b) => a + b, 0);
-            return (
-              <div key={sweepName} className="card results-card">
-                <h2>{sweepName}</h2>
-                <p>
-                  Base Pot: <strong>${users.length * contribution}</strong><br />
-                  Extra: <strong>${sweep.potBonus}</strong><br />
-                  Total Pot: <strong>${totalPot}</strong>
-                </p>
-
-                <div style={{ margin: "8px 0" }}>
-                  <input placeholder="Winner player name" id={`winner-${sweepName}`} />
-                  <button
-                    onClick={() =>
-                      declareWinner(sweepName, document.getElementById(`winner-${sweepName}`).value)
-                    }
-                    style={{ marginLeft: 8 }}
-                  >
-                    Declare Winner
-                  </button>
-                </div>
-
-                {sweep.winner && (
+          <div className="sweep-grid" style={{ marginTop: 16 }}>
+            {Object.entries(sweeps).map(([sweepName, sweep]) => {
+              const totalPot = Object.values(sweep.userContributions || {}).reduce((a, b) => a + b, 0);
+              return (
+                <div key={sweepName} className="card results-card">
+                  <h2>{sweepName}</h2>
                   <p>
-                    🏆 Winner: <strong>{sweep.winner.user}</strong> ({sweep.winner.player})
+                    Base Pot: <strong>${Object.keys(sweep.userContributions || {}).length * contribution}</strong><br />
+                    Extra: <strong>${sweep.potBonus}</strong><br />
+                    Total Pot: <strong>${totalPot}</strong>
                   </p>
-                )}
 
-                {Object.entries(sweep.assignments).map(([u, list]) => (
-                  <div key={u} style={{ marginTop: 10 }}>
-                    <strong>
-                      {u} — {list.length} player(s) — ${sweep.userContributions?.[u] ?? contribution}
-                    </strong>
-                    <ul>
-                      {list.map((p, i) => (
-                        <li key={`${sweepName}-${u}-${i}-${p}`}>{p}</li>
-                      ))}
-                    </ul>
+                  <div style={{ margin: "8px 0" }}>
+                    <input placeholder="Winner player name" id={`winner-${sweepName}`} />
+                    <button
+                      onClick={() =>
+                        declareWinner(sweepName, document.getElementById(`winner-${sweepName}`).value)
+                      }
+                      style={{ marginLeft: 8 }}
+                    >
+                      Declare Winner
+                    </button>
                   </div>
-                ))}
 
-                <div style={{ marginTop: 10 }}>
-                  <h3>Unused Players</h3>
-                  {sweep.pool.length === 0 ? <p>None</p> : (
-                    <ul>
-                      {sweep.pool.map((p, i) => <li key={`${sweepName}-pool-${i}-${p}`}>{p}</li>)}
-                    </ul>
+                  {sweep.winner && (
+                    <p>
+                      🏆 Winner: <strong>{sweep.winner.user}</strong> ({sweep.winner.player})
+                    </p>
                   )}
+
+                  {Object.entries(sweep.assignments).map(([u, list]) => (
+                    <div key={u} style={{ marginTop: 10 }}>
+                      <strong>
+                        {u} — {list.length} player(s) — ${sweep.userContributions?.[u] ?? contribution}
+                      </strong>
+                      <ul>
+                        {list.map((p) => (
+                          <li key={`${sweepName}-${u}-${p}`}>
+                            {p}{" "}
+                            <button title="Remove to pool" onClick={() => removePlayerFromUser(sweepName, u, p)}>
+                              ❌ Remove
+                            </button>
+                            <div style={{ display: "inline-flex", alignItems: "center", marginLeft: 6 }}>
+                              <select id={`move-${sweepName}-${u}-${p}`} defaultValue="">
+                                <option value="">Move to…</option>
+                                {users.filter((x) => x !== u).map((other) => (
+                                  <option key={other} value={other}>{other}</option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => {
+                                  const targetUser = document.getElementById(`move-${sweepName}-${u}-${p}`).value;
+                                  if (targetUser) {
+                                    movePlayerBetweenUsers(sweepName, u, targetUser, p);
+                                  }
+                                }}
+                                style={{ marginLeft: 4 }}
+                              >
+                                Move
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+
+                  <div style={{ marginTop: 10 }}>
+                    <h3>Unused Players</h3>
+                    {sweep.pool.length === 0 ? <p>None</p> : (
+                      <ul>
+                        {sweep.pool.map((p) => (
+                          <li key={`${sweepName}-pool-${p}`}>
+                            {p}{" "}
+                            <select id={`assign-${sweepName}-${p}`}>
+                              {users.map((u) => (
+                                <option key={u} value={u}>{u}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() =>
+                                assignPoolPlayerToUser(
+                                  sweepName,
+                                  document.getElementById(`assign-${sweepName}-${p}`).value,
+                                  p
+                                )
+                              }
+                              style={{ marginLeft: 6 }}
+                            >
+                              Assign
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
+    </div>
+  );
+}
+
+function AddMoneyControls({ sweeps, users, onAdd }) {
+  const sweepNames = Object.keys(sweeps);
+  const [sweep, setSweep] = useState(sweepNames[0] || "");
+  const [user, setUser] = useState("");
+  const [amount, setAmount] = useState("");
+
+  useEffect(() => {
+    if (!sweep && sweepNames.length) setSweep(sweepNames[0]);
+  }, [sweep, sweepNames]);
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <select value={sweep} onChange={(e) => setSweep(e.target.value)}>
+        {sweepNames.map((name) => (
+          <option key={name} value={name}>{name}</option>
+        ))}
+      </select>
+      <select value={user} onChange={(e) => setUser(e.target.value)}>
+        <option value="">Select user…</option>
+        {users.map((u) => <option key={u} value={u}>{u}</option>)}
+      </select>
+      <input
+        type="number"
+        placeholder="$ amount"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        style={{ width: 120 }}
+      />
+      <button onClick={() => { onAdd(sweep, user, amount); }}>
+        Add
+      </button>
     </div>
   );
 }

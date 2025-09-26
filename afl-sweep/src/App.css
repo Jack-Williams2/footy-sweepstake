@@ -1,85 +1,131 @@
 /* src/App.css */
 
+/* Base Light Theme */
+body {
+  background: #f8f9fa;
+  color: #222;
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
 .app-container {
-  max-width: 1200px;
-  margin: 0 auto;
   padding: 20px;
-  font-family: sans-serif;
 }
 
 .title {
-  text-align: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
+/* Setup cards side by side */
 .card-grid {
   display: flex;
-  flex-wrap: wrap;
   gap: 16px;
-  margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
+.card-grid .card {
+  flex: 1 1 300px;
+  min-width: 250px;
+}
+
+/* Sweep cards side by side */
 .sweep-grid {
   display: flex;
-  flex-wrap: wrap;
   gap: 16px;
-  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+.sweep-grid .card {
+  flex: 1 1 350px;
+  min-width: 300px;
 }
 
 .card {
   background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  color: #222;
+  border-radius: 8px;
   padding: 16px;
-  flex: 1 1 300px;   /* responsive: at least 300px wide, grows as needed */
-  min-width: 280px;  /* stops them shrinking too small */
+  margin-bottom: 16px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
 .results-card {
-  flex: 1 1 400px; /* results cards get more width */
-}
-
-.user-section {
   margin-top: 12px;
-  padding: 8px;
-  border-top: 1px solid #ddd;
 }
 
-.pool-section {
-  margin-top: 16px;
-  padding: 10px;
-  background: #f9f9f9;
-  border-radius: 8px;
-}
-
-button {
-  margin-left: 6px;
-  padding: 4px 10px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  background: #1976d2;
-  color: white;
+button,
+input,
+select,
+textarea {
+  background: #fff;
+  color: #222;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px 8px;
   font-size: 14px;
 }
 
 button:hover {
-  background: #145a9e;
+  background: #eee;
 }
 
-.remove-btn {
-  background: #e53935;
-}
-
-.remove-btn:hover {
-  background: #b71c1c;
+textarea {
+  resize: vertical;
 }
 
 .danger-btn {
-  background: #ff5722;
-  margin-top: 24px;
+  background: #c00;
+  color: #fff;
+  border: none;
+}
+.danger-btn:hover {
+  background: #a00;
 }
 
-.danger-btn:hover {
-  background: #d84315;
+.muted-text {
+  margin-top: 8px;
+  font-style: italic;
+  color: #666;
+}
+
+.warning-text {
+  color: #c00;
+}
+
+/* Dark Mode */
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #121212;
+    color: #eee;
+  }
+  .card {
+    background: #1e1e1e;
+    color: #eee;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+  button,
+  input,
+  select,
+  textarea {
+    background: #2c2c2c;
+    color: #eee;
+    border: 1px solid #555;
+  }
+  button:hover {
+    background: #3a3a3a;
+  }
+  .danger-btn {
+    background: #a33;
+    color: #fff;
+  }
+  .danger-btn:hover {
+    background: #822;
+  }
+  .muted-text {
+    color: #aaa;
+  }
+  .warning-text {
+    color: #f77;
+  }
 }
